@@ -20,8 +20,8 @@ Sections are marked with `# --- ... ---` comments, in this order:
    `read_frame` verifies the checksum and terminator and drops bad frames.
 3. **finding the reader** — `candidate_ports`, `probe`, `autodetect_port`,
    `open_reader`.
-4. **commands** — `scan`, `cmd_read`, `cmd_continuous`, `cmd_write`,
-   `verify_write`, `cmd_ports`.
+4. **commands** — `scan` (returns a dict of every tag heard), `by_signal`,
+   `cmd_read`, `cmd_continuous`, `cmd_write`, `verify_write`, `cmd_ports`.
 5. **entry point** — `build_parser`, `main`.
 
 ## Conventions that matter
@@ -34,6 +34,10 @@ Sections are marked with `# --- ... ---` comments, in this order:
 - **Writes are confirmed and verified.** `cmd_write` scans first to show what is
   about to be overwritten, confirms unless `--yes`, then re-reads the tag so the
   user sees the result rather than a bare "OK".
+- **Never act on an arbitrary tag.** `scan` keeps polling for `settle` seconds
+  after the first reply and returns every tag it heard, so `read` can list them
+  all and `write` can refuse when there is more than one. Anything that picks
+  "the first tag that answered" is a bug.
 - **Retries only where retrying helps.** Write retries exist because the first
   attempt often fails while the tag settles in the field. Codes in
   `PERMANENT_ERRORS` (wrong password, locked, overrun) stop immediately.
@@ -55,7 +59,9 @@ There is no test suite. A pty-based simulator is the practical way to exercise
 the code paths — open a pty with `os.openpty()`, answer `0x22` with an inventory
 frame and `0x49` by updating the simulated tag, and run `uhf.py -p <pty>`
 against it. That covers read, continuous, write, the PC-rewrite path and the
-error paths, none of which need a real tag.
+error paths, none of which need a real tag. Answering polls with several
+different EPCs covers the multi-tag paths — the listing in `read` and the
+refusal in `write`.
 
 What a simulator cannot tell you: real RSSI behaviour, writes that fail from
 weak coupling, and the live `--continuous` display (it only activates on a tty —

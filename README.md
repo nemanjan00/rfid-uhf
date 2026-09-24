@@ -43,11 +43,21 @@ python3 uhf.py ports
 A successful read looks like:
 
 ```
-OK  EPC E28068940000502DFB364096   PC 3000   signal ###.. -48 dBm
+OK  EPC E28069150000503197B0B1A4   PC 3000   signal ###.. -47 dBm
+```
+
+`read` reports everything in the field, not just the first tag to answer:
+
+```
+OK  3 tags in the field, strongest first:
+      EPC E28069150000503197B0B1A4   PC 3000   signal ###.. -47 dBm
+      EPC E28068940000502DFB364096   PC 3000   signal ##... -55 dBm
+      EPC 3005FB63AC1F3681EC880468   PC 3000   signal #.... -64 dBm
 ```
 
 Writing shows the tag's current EPC, asks before overwriting it, and reads the
-tag back afterwards so you can see the change took:
+tag back afterwards so you can see the change took. It refuses outright if more
+than one tag is in range:
 
 ```
     Tag found:  EPC E28068940000502DFB364096   PC 3000   signal ###.. -48 dBm
@@ -147,9 +157,9 @@ byte (`0x00` = success).
 - **Writes often fail on the first attempt** while the tag settles in the
   field. The tool retries up to 10 times, but gives up immediately on errors a
   retry cannot fix (wrong password, locked tag, memory overrun).
-- **Write targets whichever tag answers first.** There is no tag selection, so
-  keep a single tag in the field when writing. `read --continuous` shows what
-  is in range.
+- **Writing needs a single tag in the field.** Gen2 gives no way to aim a write
+  at one tag, so `write` refuses when it sees more than one and lists what it
+  found rather than overwriting an arbitrary tag. `read` shows what is in range.
 - **Hold the tag close for writes** — a few centimetres. A tag that reads fine
   at -50 dBm may still be too weak to write.
 - The reader keeps streaming if a previous run left it polling, so the tool

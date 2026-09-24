@@ -248,12 +248,16 @@ def open_reader(args):
 # --- commands --------------------------------------------------------------
 
 
-def scan(ser, timeout, verbose, label="Hold a tag near the antenna"):
-    """Poll until one tag answers.
+def scan(ser, timeout, verbose, label="Hold a tag near the antenna", settle=0.6):
+    """Poll for tags until the field is quiet or the timeout runs out.
 
-    Returns (tag, reader_answered).  The second value tells a caller whether
-    the reader itself was talking to us, so "no tag" can be told apart from
-    "nothing on the port".
+    Returns (tags, reader_answered).  `tags` maps EPC to the latest reading,
+    so several tags in the field all get reported instead of whichever one
+    happened to answer first.  Once a tag replies, polling continues for
+    `settle` seconds to give the others a chance to be heard.
+
+    `reader_answered` tells a caller whether the reader itself was talking to
+    us, so "no tag" can be told apart from "nothing on the port".
     """
     spin = "|/-\\"
     tick = 0
@@ -262,14 +266,16 @@ def scan(ser, timeout, verbose, label="Hold a tag near the antenna"):
     if interactive:
         print(f"    {label}... ", end="", flush=True)
 
+    tags = {}
     answered = False
+    quiet_by = None
     last_poll = 0.0
     try:
-        while time.time() < deadline:
-            if time.time() - last_poll > 0.5:
+        while time.time() < deadline and (quiet_by is None or time.time() < quiet_by):
+            if time.time() - last_poll > 0.2:
                 send(ser, build_frame(CMD_SINGLE_POLL), verbose)
                 last_poll = time.time()
-            f = read_frame(ser, timeout=0.3, verbose=verbose)
+            f = read_frame(ser, timeout=0.2, verbose=verbose)
             if interactive:
                 print(f"\b{spin[tick % 4]}", end="", flush=True)
                 tick += 1
@@ -279,18 +285,22 @@ def scan(ser, timeout, verbose, label="Hold a tag near the antenna"):
             if f["cmd"] == CMD_SINGLE_POLL and f["type"] in (0x01, 0x02):
                 tag = parse_inventory(f["params"])
                 if tag:
-                    if interactive:
-                        print("\r\033[K", end="")
-                    return tag, True
+                    tags[tag["epc"]] = tag
+                    if quiet_by is None or settle == 0:
+                        quiet_by = time.time() + settle
     finally:
         if interactive:
             print("\r\033[K", end="", flush=True)
-    return None, answered
+    return tags, answered
+
+
+def by_signal(tags):
+    return sorted(tags.values(), key=lambda t: -t["rssi_dbm"])
 
 
 def cmd_read(ser, args):
-    tag, answered = scan(ser, args.timeout, args.verbose)
-    if not tag:
+    tags, answered = scan(ser, args.timeout, args.verbose)
+    if not tags:
         fail("No tag found." if answered else "The reader is not responding.")
         if not answered:
             hint("Check the port and baud rate, or unplug and replug the reader.")
@@ -299,7 +309,14 @@ def cmd_read(ser, args):
         hint("Hold the tag a few centimetres from the antenna and try again.")
         hint("To keep scanning until you stop it:  uhf.py read --continuous")
         return 1
-    ok(format_tag(tag))
+
+    if len(tags) == 1:
+        ok(format_tag(next(iter(tags.values()))))
+    else:
+        ok(f"{len(tags)} tags in the field, strongest first:")
+        for tag in by_signal(tags):
+            info(f"  {format_tag(tag)}")
+        hint("Writing needs a single tag in the field.")
     return 0
 
 
@@ -393,8 +410,8 @@ def cmd_write(ser, args):
     epc, pwd = args.epc_bytes, args.pwd_bytes
     words = len(epc) // 2
 
-    current, answered = scan(ser, args.timeout, args.verbose, "Looking for a tag to write")
-    if not current:
+    found, answered = scan(ser, args.timeout, args.verbose, "Looking for a tag to write")
+    if not found:
         fail("No tag found, so there is nothing to write to."
              if answered else "The reader is not responding.")
         if not answered:
@@ -402,6 +419,18 @@ def cmd_write(ser, args):
             return 1
         hint("Writing needs the tag closer than reading does -- a few centimetres.")
         return 1
+
+    # There is no way to aim a write at one tag, so refuse rather than
+    # overwrite whichever one happens to answer first.
+    if len(found) > 1:
+        fail(f"{len(found)} tags are in the field, so the write would hit an "
+             "arbitrary one:")
+        for tag in by_signal(found):
+            info(f"  {format_tag(tag)}")
+        hint("Leave only the tag you want to write near the antenna.")
+        return 1
+
+    current = next(iter(found.values()))
 
     info(f"Tag found:  {format_tag(current)}")
     if current["epc"] == epc.hex().upper():
@@ -468,12 +497,14 @@ def report_write_failure(last_error, attempts):
 def verify_write(ser, args, epc):
     """Read the tag back so the user sees the change, not just a success line."""
     time.sleep(0.2)
-    tag, _ = scan(ser, 2.0, args.verbose, "Checking the tag")
-    if tag and tag["epc"] == epc.hex().upper():
-        ok(f"Written and verified:  {format_tag(tag)}")
+    tags, _ = scan(ser, 2.0, args.verbose, "Checking the tag")
+    written = tags.get(epc.hex().upper())
+    if written:
+        ok(f"Written and verified:  {format_tag(written)}")
         return 0
-    if tag:
-        fail(f"The reader accepted the write, but the tag reads back as {tag['epc']}.")
+    if tags:
+        others = ", ".join(sorted(tags))
+        fail(f"The reader accepted the write, but the tag reads back as {others}.")
         hint("Try again with the tag held closer to the antenna.")
         return 1
     warn("The reader accepted the write, but the tag did not answer the read-back.")
