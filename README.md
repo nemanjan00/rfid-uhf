@@ -147,6 +147,9 @@ byte (`0x00` = success).
 - **Writes often fail on the first attempt** while the tag settles in the
   field. The tool retries up to 10 times, but gives up immediately on errors a
   retry cannot fix (wrong password, locked tag, memory overrun).
+- **Write targets whichever tag answers first.** There is no tag selection, so
+  keep a single tag in the field when writing. `read --continuous` shows what
+  is in range.
 - **Hold the tag close for writes** — a few centimetres. A tag that reads fine
   at -50 dBm may still be too weak to write.
 - The reader keeps streaming if a previous run left it polling, so the tool
